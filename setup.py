@@ -10,8 +10,8 @@ if sys.platform == 'win32':
 	    Extension("pyffmpeg", ["pyffmpeg.pyx"],
 		define_macros=[('EMULATE_INTTYPES', '1')],
 		include_dirs=["/usr/include/ffmpeg"], 
-		library_dirs=[r"\usr\lib"], 
-		libraries = ["avutil-49","avformat-50","avcodec-51"])
+		library_dirs=[r"/usr/lib"], 
+		libraries = ["avutil-49","avformat-50","avcodec-51","swscale-0])
 	    ],
 	  cmdclass = {'build_ext': build_ext}
 	)
@@ -21,10 +21,10 @@ else:
 	  ext_modules=[ 
 	    Extension("pyffmpeg", ["pyffmpeg.pyx"],
 		include_dirs=["/usr/include/ffmpeg"], 
-		libraries = ["avformat","avcodec"])
+		libraries = ["avformat","avcodec","swscale"])
 	    ],
 	  cmdclass = {'build_ext': build_ext},
-	  version = "0.2.0",
+	  version = "0.2.2",
 	  author = "James Evans",
 	  author_email = "jaevans@users.sf.net",
 	  url = "http://www.clark-evans.com/~milamber/pyffmpeg",

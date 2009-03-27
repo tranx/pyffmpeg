@@ -19,6 +19,7 @@
 import Image
 
 ctypedef signed long long int64_t
+ctypedef unsigned char uint8_t
 
 cdef enum:
 	SEEK_SET = 0
@@ -61,6 +62,24 @@ cdef extern from "avutil.h":
 		PIX_FMT_UYVY422,   #< Packed pixel, Cb Y0 Cr Y1
 		PIX_FMT_UYVY411,   #< Packed pixel, Cb Y0 Y1 Cr Y2 Y3
 		PIX_FMT_NB,
+	
+	void av_free(void *ptr)
+
+cdef extern from "swscale.h":
+	cdef enum:
+		SWS_BICUBIC,
+
+	struct SwsContext:
+		pass
+	
+	struct SwsFilter:
+		pass
+
+	SwsContext *sws_getContext(int srcW, int srcH, int srcFormat, int dstW, int dstH, int dstFormat, int flags,
+                                  SwsFilter *srcFilter, SwsFilter *dstFilter, double *param)
+	void sws_freeContext(SwsContext *swsContext)
+	int sws_scale(SwsContext *context, uint8_t* src[], int srcStride[], int srcSliceY,
+				  int srcSliceH, uint8_t* dst[], int dstStride[])
 
 cdef extern from "avcodec.h":
 	# use an unamed enum for defines
@@ -135,28 +154,30 @@ cdef extern from "avcodec.h":
 		int64_t pos                            #< byte position in stream, -1 if unknown
 
 	struct AVFrame:
-		char *data[4]
+		uint8_t *data[4]
 		int linesize[4]
 		int64_t pts
 		int pict_type
 		int key_frame
 
 	struct AVPicture:
-		pass
+		uint8_t *data[4]
+		int linesize[4]
+
 	AVCodec *avcodec_find_decoder(int id)
 	int avcodec_open(AVCodecContext *avctx, AVCodec *codec)
 	int avcodec_decode_video(AVCodecContext *avctx, AVFrame *picture,
                          int *got_picture_ptr,
                          char *buf, int buf_size)
-	int avpicture_fill(AVPicture *picture, void *ptr,
+	int avpicture_fill(AVPicture *picture, uint8_t *ptr,
                    int pix_fmt, int width, int height)
 	AVFrame *avcodec_alloc_frame()
 	int avpicture_get_size(int pix_fmt, int width, int height)
 	int avpicture_layout(AVPicture* src, int pix_fmt, int width, int height,
                      unsigned char *dest, int dest_size)
-	int img_convert(AVPicture *dst, int dst_pix_fmt,
-                AVPicture *src, int pix_fmt,
-                int width, int height)
+	#int img_convert(AVPicture *dst, int dst_pix_fmt,
+    #            AVPicture *src, int pix_fmt,
+    #            int width, int height)
 				
 	void avcodec_flush_buffers(AVCodecContext *avctx)
 
@@ -271,8 +292,8 @@ cdef extern from "avformat.h":
 
 
 cdef extern from "avio.h":
-	int url_ferror(ByteIOContext *s)
-	int url_feof(ByteIOContext *s)
+	int url_ferror(ByteIOContext* s)
+	int url_feof(ByteIOContext* s)
 	
 cdef __registered
 __registered = 0
@@ -298,7 +319,7 @@ cdef class VideoStream:
 	cdef object index
 	cdef object keyframes
 	
-	def __new__(self):
+	def __cinit__(self):
 		self.FormatCtx = NULL
 		self.frame = avcodec_alloc_frame()
 		self.frameno = 0
@@ -353,9 +374,11 @@ cdef class VideoStream:
 	cdef AVFrame *ConvertToRGBA(self,AVPicture *frame,AVCodecContext *pCodecCtx):
 		cdef AVFrame *pFrameRGBA
 		cdef int numBytes
-		cdef char *rgb_buffer
+		cdef uint8_t *rgb_buffer
 		cdef int width,height
-
+		cdef SwsContext *convert_ctx
+		cdef AVPicture *pPictureRGBA
+		
 		pFrameRGBA = avcodec_alloc_frame()
 		if pFrameRGBA == NULL:
 			raise MemoryError("Unable to allocate RGB Frame")
@@ -365,20 +388,32 @@ cdef class VideoStream:
 		# Determine required buffer size and allocate buffer
 		numBytes=avpicture_get_size(PIX_FMT_RGBA32, width,height)
 		# Hrm, how do I figure out when to release the old one....
-		rgb_buffer = <char *>PyMem_Malloc(numBytes)
+		rgb_buffer = <uint8_t *>PyMem_Malloc(numBytes)
 		avpicture_fill(<AVPicture *>pFrameRGBA, rgb_buffer, PIX_FMT_RGBA32,
 				width, height)
 
-		img_convert(<AVPicture *>pFrameRGBA, PIX_FMT_RGBA32,
-					<AVPicture *>frame, pCodecCtx.pix_fmt, width,
-					height)
+		convert_ctx = sws_getContext(width, height, pCodecCtx.pix_fmt, width,height,PIX_FMT_RGBA32, SWS_BICUBIC, NULL, NULL, NULL)
+		if convert_ctx == NULL:
+			raise MemoryError("Unable to allocate scaler context")
+
+		pPictureRGBA = <AVPicture *>pFrameRGBA
+		sws_scale(convert_ctx, frame.data, frame.linesize, 0, height, pPictureRGBA.data, pPictureRGBA.linesize)
+
+		sws_freeContext(convert_ctx)
+
+		#img_convert(<AVPicture *>pFrameRGBA, PIX_FMT_RGBA32,
+		#			<AVPicture *>frame, pCodecCtx.pix_fmt, width,
+		#			height)
+		
 		return pFrameRGBA
 
 	cdef AVFrame *ConvertToRGB24(self,AVPicture *frame,AVCodecContext *pCodecCtx):
 		cdef AVFrame *pFrameRGB24
 		cdef int numBytes
-		cdef char *rgb_buffer
+		cdef uint8_t *rgb_buffer
 		cdef int width,height
+		cdef SwsContext *convert_ctx
+		cdef AVPicture *pPictureRGB24
 
 		pFrameRGB24 = avcodec_alloc_frame()
 		if pFrameRGB24 == NULL:
@@ -389,13 +424,22 @@ cdef class VideoStream:
 		# Determine required buffer size and allocate buffer
 		numBytes=avpicture_get_size(PIX_FMT_RGB24, width,height)
 		# Hrm, how do I figure out how to release the old one....
-		rgb_buffer = <char *>PyMem_Malloc(numBytes)
+		rgb_buffer = <uint8_t *>PyMem_Malloc(numBytes)
 		avpicture_fill(<AVPicture *>pFrameRGB24, rgb_buffer, PIX_FMT_RGB24,
 				width, height)
 
-		img_convert(<AVPicture *>pFrameRGB24, PIX_FMT_RGB24,
-					<AVPicture *>frame, pCodecCtx.pix_fmt, width,
-					height)
+		convert_ctx = sws_getContext(width, height, pCodecCtx.pix_fmt, width,height,PIX_FMT_RGB24, SWS_BICUBIC, NULL, NULL, NULL)
+		if convert_ctx == NULL:
+			raise MemoryError("Unable to allocate scaler context")
+
+		pPictureRGB24 = <AVPicture *>pFrameRGB24
+		sws_scale(convert_ctx, frame.data, frame.linesize, 0, height, pPictureRGB24.data, pPictureRGB24.linesize)
+
+		sws_freeContext(convert_ctx)
+
+		#img_convert(<AVPicture *>pFrameRGB24, PIX_FMT_RGB24,
+		#			<AVPicture *>frame, pCodecCtx.pix_fmt, width,
+		#			height)
 		return pFrameRGB24
 
 	def SaveFrame(self):
@@ -418,6 +462,7 @@ cdef class VideoStream:
 			f.write(PyBuffer_FromMemory(pFrameRGB.data[0] + i * pFrameRGB.linesize[0],width * 3))
 		f.close()
 		PyMem_Free(pFrameRGB.data[0])
+		av_free(pFrameRGB)
 
 	def GetCurrentFrame(self):
 		cdef AVFrame *pFrameRGB
@@ -430,6 +475,7 @@ cdef class VideoStream:
 
 		img_image = Image.frombuffer("RGBA",(self.CodecCtx.width,self.CodecCtx.height),buf_obj,"raw","BGRA",pFrameRGB.linesize[0],1)
 		PyMem_Free(pFrameRGB.data[0])
+		av_free(pFrameRGB)
 		return img_image
 		
 		
@@ -455,6 +501,7 @@ cdef class VideoStream:
 		else:
 			pts = self.packet.pts
 		stream = self.FormatCtx.streams[self.videoStream]
+		av_free_packet(&self.packet)
 		return av_rescale(pts,AV_TIME_BASE * <int64_t>stream.time_base.num,stream.time_base.den)
 
 	def GetNextFrame(self):
@@ -583,7 +630,7 @@ cdef class VideoStream:
 		
 	def GetFrameTime(self,float timestamp):
 		cdef int64_t targetPts
-		targetPts = timestamp * AV_TIME_BASE
+		targetPts = int(timestamp * AV_TIME_BASE)
 		return self.GetFramePts(targetPts)
 		
 	def GetFramePts(self,int64_t pts):
