@@ -11,7 +11,7 @@ if sys.platform == 'win32':
 		define_macros=[('EMULATE_INTTYPES', '1')],
 		include_dirs=["/usr/include/ffmpeg"], 
 		library_dirs=[r"/usr/lib"], 
-		libraries = ["avutil-49","avformat-50","avcodec-51","swscale-0])
+		libraries = ["avutil-49","avformat-50","avcodec-51","swscale-0"])
 	    ],
 	  cmdclass = {'build_ext': build_ext}
 	)
