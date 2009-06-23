@@ -20,8 +20,8 @@ else:
 	  name = "pyffmpeg",
 	  ext_modules=[ 
 	    Extension("pyffmpeg", ["pyffmpeg.pyx"],
-		include_dirs=["/usr/include/ffmpeg"], 
-		libraries = ["avformat","avcodec","swscale"])
+		include_dirs=["/usr/include/libavcodec/","/usr/include/libavformat","/usr/include/libavutil","/usr/include/libswscale"], 
+		libraries = ["z","bz2","avformat","avcodec","swscale","avutil"])
 	    ],
 	  cmdclass = {'build_ext': build_ext},
 	  version = "0.2.2",
