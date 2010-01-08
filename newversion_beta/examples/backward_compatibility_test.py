@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 import sys
-import pyffmpegb as pyffmpeg
+import pyffmpeg
 
 stream = pyffmpeg.VideoStream()
 stream.open(sys.argv[1])

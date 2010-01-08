@@ -41,7 +41,7 @@ def hamming(lw):
    return 0.54-0.46*numpy.cos(numpy.pi*2.*numpy.arange(0,1.,1./lw))
 
 
-from pyffmpegb import *
+from pyffmpeg import *
 frate=44100.
 freq=8
 df=2048

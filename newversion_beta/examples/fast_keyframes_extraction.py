@@ -5,7 +5,7 @@
 
 ## import your modules
 
-from pyffmpegb import *
+from pyffmpeg import *
 from PyQt4 import QtCore
 from PyQt4 import QtGui
 
@@ -82,13 +82,15 @@ tracks[0].set_observer(obs)
 
 import time
 print time.clock()
+dur=mp.duration()/1000000
+print "Duration = ",dur
 try:
    mp.run()
 except Exception, e:
-  print e
-  print time.clock()
+  print "Exception e=", e
+  print "Processing time=",time.clock()
   print tt," keyframes"
-  print (3600*30.)/tt ," frames per keyframe"
-  print (3600.)/time.clock() ," times faster than rt"
+  print (dur*30.)/tt ," frames per keyframe"
+  print (dur)/time.clock() ," times faster than rt"
 
 

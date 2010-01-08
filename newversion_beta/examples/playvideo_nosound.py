@@ -5,7 +5,7 @@
 
 ## import your modules
 
-from pyffmpegb import *
+from pyffmpeg import *
 from PyQt4 import QtCore
 from PyQt4 import QtGui
 
