@@ -1,0 +1,66 @@
+Building pyffmpeg on Linux
+--------------------------
+
+All you need to build it on Linux is the ffmpeg, and libswcale library installed.
+
+Then all you need to do it run those two commands and you're done:
+
+python setup.py build
+python setup.py install
+
+
+
+Building pyffmpeg on Windows
+----------------------------
+
+Building on Windows is slighly more complex. We're going to ffmpeg and pyffmpeg using MinGW and MSYS.
+
+The following are instruction from a post I made at (http://www.gooli.org/blog/building-ffmpeg-for-windows-with-msys-and-mingw/).
+
+We’ll start with downloading some tools of the trade and the source for ffmpeg.
+
+   1. Download MinGW from here.
+   2. Download MSYS from here.
+   3. Download updated bash for MSYS from here.
+   4. Get the latest snapshot of ffmpeg from here (here’s a direct link).
+
+Let’s install the tools.
+
+   1. Install MinGW (choose “MinGW base tools” and “MinGW make”) into c:\mingw
+   2. Install MSYS into c:\msys\1.0
+   3. After MSYS installation it will run a postinstall script. It will ask you some questions which you should answer as following:
+
+      Do you wish to continue with the post install? [yn ] -> y
+      Do you have MinGW installed? [yn ] -> y
+      Where is your MinGW installation? -> C:\mingw
+
+   4. Copy bash-2.05b-MSYS.tar.bz2 to c:\msys\1.0 and extract it (bash.exe should go into C:\MSYS\1.0\bin).
+      We need to do this because ffmpeg’s configure script doesn’t work with bash 2.0.4 that comes with MSYS.
+   5. Extract the ffmpeg sources. I’ll assume you’ve extracted them to c:\work\ffmpeg
+
+Now it’s time to build the library.
+
+   1. Create a file called myconfig in c:\work\ffmpeg and copy the following into it:
+
+      #!/bin/sh
+      ./configure -–extra-cflags="--mno-cygwin --mms-bitfields" -–extra-ldflags="-Wl,-–add-stdcall-alias" -–enable-memalign-hack -–enable-mingw32 -–enable-shared -–disable-static
+
+   2. Run c:\msys\1.0\msys.bat. Run the following commands in the shell that starts:
+
+      $ cd /c/work/ffmpeg
+      $ ./myconfig
+      $ make
+
+
+Now that you've got ffmpeg and its libraries compiled, all that remains in building pyffmpeg. Still in MSYS's terminal, run the following commands:
+
+      $ cd /c/work/pyffmpeg
+      $ python setup.py build
+      $ python setup.py install
+
+You might need to edit the setup.py script and change the value of the WIN32_FFMPEG_BASE_DIR variable to the place where you put ffmpeg.
+
+
+
+Enjoy,
+Eli Golovinsky
