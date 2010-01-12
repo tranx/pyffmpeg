@@ -82,7 +82,7 @@ except:
     pass
 
 
-libs = ('avformat', 'avcodec', 'swscale')
+libs = ('avformat', 'avcodec', 'avutil', 'swscale')
 incdir = [ path_join(ffmpegpath, 'include'), "/usr/include/ffmpeg" , "./include" ] + nd.get_numpy_include_dirs()
 libinc = [ path_join(ffmpegpath, 'lib') ]
 
