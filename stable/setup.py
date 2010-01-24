@@ -6,13 +6,13 @@ from Cython.Distutils import build_ext
 from os.path import join as path_join
 from sys import platform
 try:
-    import numpy.distutils.misc_util as nd
-    with_numpy=True
+  import numpy.distutils.misc_util as nd
+  with_numpy=True
 except:
-    with_numpy=False
-    sys.stderr.write("Numpy does not seems to be installed on your system.\n")
-    sys.stderr.write("You may still use pyffmpeg but you may use it with numpy without a rebuild.\n")  
-  
+  with_numpy=False
+  sys.stderr.write("Numpy does not seems to be installed on your system.\n")
+  sys.stderr.write("You may still use pyffmpeg but you may use it with numpy without a rebuild.\n")  
+
 NEED_LIBZ_LIBS=False
 
 
@@ -25,16 +25,16 @@ if platform == 'win32':
     ffmpegpath = r'c:\ffmpeg-static'
     for x in [ r'..\ffmpeg',  r'c:\ffmpeg-static', r'c:\ffmpeg' ]:
         try:
-            os.stat(x)
-            ffmpegpath = x
+             os.stat(x)
+             ffmpegpath = x
         except:
             pass
 else:
     ffmpegpath = '/opt/ffmpeg'
     for x in [ os.environ["HOME"]+"build/ffmpeg",  '/usr/local/ffmpeg',  '/opt/ffmpeg' ]:
         try:
-            os.stat(x)
-            ffmpegpath = x
+             os.stat(x)
+             ffmpegpath = x
         except:
             pass    
 
@@ -90,9 +90,9 @@ except:
 
 libs = ['avformat', 'avcodec', 'avutil', 'swscale']
 if NEED_LIBZ_LIBS:
-    libs.append('z')
-    lib.append('bz2')
-   
+ libs.append('z')
+ lib.append('bz2')
+
 incdir = [ path_join(ffmpegpath, 'include'), "/usr/include/ffmpeg" , "./include" ] + nd.get_numpy_include_dirs()
 libinc = [ path_join(ffmpegpath, 'lib') ]
 
@@ -103,21 +103,21 @@ if platform == 'win32':
 with_numpy=True
 
 if with_numpy:
-    ext_modules=[ Extension('pyffmpeg', [ 'pyffmpeg.pyx' ],
-                   include_dirs = incdir,
-                   library_dirs = libinc,
-                   libraries = libs),
-                  Extension('pyffmpeg_numpybindings', [ 'pyffmpeg_numpybindings.pyx' ],
-                   include_dirs = incdir,
-                   library_dirs = libinc,
-                   libraries = libs)
-                 ]
+        ext_modules=[ Extension('pyffmpeg', [ 'pyffmpeg.pyx' ],
+                       include_dirs = incdir,
+                       library_dirs = libinc,
+                       libraries = libs),
+                      Extension('pyffmpeg_numpybindings', [ 'pyffmpeg_numpybindings.pyx' ],
+                       include_dirs = incdir,
+                       library_dirs = libinc, 
+                       libraries = libs)
+                     ]
 else:
-    ext_modules=[ Extension('pyffmpeg', [ 'pyffmpeg.pyx' ],
-                   include_dirs = incdir,
-                   library_dirs = libinc,
-                   libraries = libs)
-                ]
+        ext_modules=[ Extension('pyffmpeg', [ 'pyffmpeg.pyx' ],
+                       include_dirs = incdir,
+                       library_dirs = libinc,
+                       libraries = libs)
+                    ]
 
 
 setup(

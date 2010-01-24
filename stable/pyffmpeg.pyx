@@ -541,7 +541,7 @@ cdef class VideoStream:
 
         pFramePixFormat = avcodec_alloc_frame()
         if pFramePixFormat == NULL:
-            raise MemoryError("Unable to allocate Frame")
+            raise MemoryError("Unable to allocate Frame") 
 
         width = self.CodecCtx.width
         height = self.CodecCtx.height

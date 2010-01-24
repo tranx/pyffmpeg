@@ -108,7 +108,7 @@ if with_numpy:
                      ]
 else:
         ext_modules=[ Extension('pyffmpeg', [ 'pyffmpeg.pyx' ],
-                       include_dirs = incdir,
+                       include_dirs = incdir, 
                        library_dirs = libinc,
                        libraries = libs)
                     ]

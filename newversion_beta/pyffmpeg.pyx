@@ -629,7 +629,7 @@ def rwbuffer_at(pos,len):
 
 #cdef extern from "avio.h":
 #    int url_ferror(ByteIOContext* s)
-#    int url_feof(ByteIOContext* s)
+#    int url_feof(ByteIOContext* s) 
 
 
 ##################################################################
