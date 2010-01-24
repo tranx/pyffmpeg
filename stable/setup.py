@@ -1,32 +1,130 @@
+# -*- coding: utf-8 -*-
+import os
 from distutils.core import setup
 from distutils.extension import Extension
-from Pyrex.Distutils import build_ext
+from Cython.Distutils import build_ext
+from os.path import join as path_join
+from sys import platform
+try:
+    import numpy.distutils.misc_util as nd
+    with_numpy=True
+except:
+    with_numpy=False
+    sys.stderr.write("Numpy does not seems to be installed on your system.\n")
+    sys.stderr.write("You may still use pyffmpeg but you may use it with numpy without a rebuild.\n")  
+  
+NEED_LIBZ_LIBS=False
 
-import sys
-if sys.platform == 'win32':
-	setup(
-	  name = "pyffmpeg",
-	  ext_modules=[ 
-	    Extension("pyffmpeg", ["pyffmpeg.pyx"],
-		define_macros=[('EMULATE_INTTYPES', '1')],
-		include_dirs=["/usr/include/ffmpeg"], 
-		library_dirs=[r"/usr/lib"], 
-		libraries = ["avutil-49","avformat-50","avcodec-51","swscale-0"])
-	    ],
-	  cmdclass = {'build_ext': build_ext}
-	)
+
+
+##
+## Try to locate source if necessary
+##
+
+if platform == 'win32':
+    ffmpegpath = r'c:\ffmpeg-static'
+    for x in [ r'..\ffmpeg',  r'c:\ffmpeg-static', r'c:\ffmpeg' ]:
+        try:
+            os.stat(x)
+            ffmpegpath = x
+        except:
+            pass
 else:
-	setup(
-	  name = "pyffmpeg",
-	  ext_modules=[ 
-	    Extension("pyffmpeg", ["pyffmpeg.pyx"],
-		include_dirs=["/usr/include/libavcodec/","/usr/include/libavformat","/usr/include/libavutil","/usr/include/libswscale"], 
-		libraries = ["z","bz2","avformat","avcodec","swscale","avutil"])
-	    ],
-	  cmdclass = {'build_ext': build_ext},
-	  version = "0.2.2",
-	  author = "James Evans",
-	  author_email = "jaevans@users.sf.net",
-	  url = "http://www.clark-evans.com/~milamber/pyffmpeg",
-	)
+    ffmpegpath = '/opt/ffmpeg'
+    for x in [ os.environ["HOME"]+"build/ffmpeg",  '/usr/local/ffmpeg',  '/opt/ffmpeg' ]:
+        try:
+            os.stat(x)
+            ffmpegpath = x
+        except:
+            pass    
+
+#
+# Try to resove
+# static dependencies resolution by looking into pkgconfig files
+def static_resolver(libs):
+    deps = []
+
+    for lib in libs:
+        try:
+            pc = open(path_join(ffmpegpath, 'lib', 'pkgconfig', 'lib' + lib + '.pc'))
+        except IOError:
+            continue
+
+        # we only need line starting with 'Libs:'
+        l = filter(lambda x: x.startswith('Libs:'), pc).pop().strip()
+
+        # we only need after '-lmylib' and one entry for library
+        d = l.split(lib, 1).pop().split()
+
+        # remove '-l'
+        d = map(lambda x: x[2:], d)
+
+        # empty list means no deps
+        if len(d): deps += d
+
+    # Unique list
+    result = list(libs)
+    map(lambda x: x not in result and result.append(x), deps)
+    return result
+
+
+#
+# compatibility with old FFMPEG ubuntu packages, so that build 
+# work straight out of the box on these distrib
+#
+
+try:
+    os.stat("/usr/include/ffmpeg")
+    os.mkdir("include")
+    os.stat("/usr/include/ffmpeg/avcodec.h")    
+    os.system("ln -s /usr/include/ffmpeg ./include/libavcodec")
+    os.stat("/usr/include/ffmpeg/avformat.h")        
+    os.system("ln -s /usr/include/ffmpeg ./include/libavformat")    
+    os.stat("/usr/include/ffmpeg/avutil.h")        
+    os.system("ln -s /usr/include/ffmpeg ./include/libavutil")
+    os.stat("/usr/include/ffmpeg/swscale.h")        
+    os.system("ln -s /usr/include/ffmpeg ./include/libswscale")    
+except:
+    pass
+
+
+libs = ['avformat', 'avcodec', 'avutil', 'swscale']
+if NEED_LIBZ_LIBS:
+    libs.append('z')
+    lib.append('bz2')
+   
+incdir = [ path_join(ffmpegpath, 'include'), "/usr/include/ffmpeg" , "./include" ] + nd.get_numpy_include_dirs()
+libinc = [ path_join(ffmpegpath, 'lib') ]
+
+if platform == 'win32':
+    libs = static_resolver(libs + ('avutil',))
+    libinc += [ r'/mingw/lib' ] # why my mingw is unable to find libz2?
+
+with_numpy=True
+
+if with_numpy:
+    ext_modules=[ Extension('pyffmpeg', [ 'pyffmpeg.pyx' ],
+                   include_dirs = incdir,
+                   library_dirs = libinc,
+                   libraries = libs),
+                  Extension('pyffmpeg_numpybindings', [ 'pyffmpeg_numpybindings.pyx' ],
+                   include_dirs = incdir,
+                   library_dirs = libinc,
+                   libraries = libs)
+                 ]
+else:
+    ext_modules=[ Extension('pyffmpeg', [ 'pyffmpeg.pyx' ],
+                   include_dirs = incdir,
+                   library_dirs = libinc,
+                   libraries = libs)
+                ]
+
+
+setup(
+    name = 'pyffmpeg',
+    version = "0.3",
+    url = "http://code.google.com/p/pyffmpeg/",
+    cmdclass = {'build_ext': build_ext},
+    ext_modules = ext_modules
+)
 

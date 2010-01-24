@@ -117,5 +117,6 @@ else:
 setup(
     name = 'pyffmpeg',
     cmdclass = {'build_ext': build_ext},
+    version = "1.9.1",
     ext_modules = ext_modules
 )
