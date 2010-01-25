@@ -114,6 +114,9 @@ cdef extern from "libavformat/avio.h":
                   #offset_t (*seek)(void *opaque, offset_t offset, int whence))
 
 
+cdef extern from "libavutil/mem.h":
+        void *av_mallocz(unsigned int size) 
+
 cdef extern from "libavutil/avutil.h":
     cdef enum PixelFormat:
         PIX_FMT_NONE= -1,
@@ -477,6 +480,18 @@ cdef extern from "libavformat/avformat.h":
     struct AVIndexEntry:
         pass
 
+    struct AVInputFormat:
+        pass
+
+    struct AVOutputFormat: 
+       char *name
+       char *long_name
+       char *mime_type
+       char *extensions
+       int priv_data_size
+       int video_codec
+       int audio_codec
+
     struct AVStream:
         int index    #/* Track index in AVFormatContext */
         int id       #/* format specific Track id */
@@ -528,6 +543,9 @@ cdef extern from "libavformat/avformat.h":
 
     struct AVFormatContext:
         int nb_streams
+        AVInputFormat *iformat
+        AVOutputFormat *oformat
+        void * priv_data
         AVStream **streams
         int64_t timestamp
         int64_t start_time
@@ -535,7 +553,7 @@ cdef extern from "libavformat/avformat.h":
         #uint8_t *cur_ptr
         #int cur_len
         #AVPacket cur_pkt
-        ByteIOContext pb
+        ByteIOContext * pb
         # decoding: total file size. 0 if unknown
         int64_t file_size
         int64_t duration
@@ -564,6 +582,8 @@ cdef extern from "libavformat/avformat.h":
     void av_close_input_file(AVFormatContext *ic_ptr)
     void av_close_input_stream(AVFormatContext *s)
     int av_find_stream_info(AVFormatContext *ic)
+        
+    AVStream *av_new_stream(AVFormatContext *s, int id)
 
     void dump_format(AVFormatContext *ic,
                  int index,
@@ -579,8 +599,8 @@ cdef extern from "libavformat/avformat.h":
 
     int av_index_search_timestamp(AVStream *st, int64_t timestamp, int flags)
     AVInputFormat *av_probe_input_format(AVProbeData *pd, int is_opened)
-
-
+    AVFormatContext *  avformat_alloc_context()
+    AVOutputFormat *guess_format(char *short_name, char *filename,char *mime_type)
 
 cdef __registered
 __registered = 0
@@ -629,7 +649,7 @@ def rwbuffer_at(pos,len):
 
 #cdef extern from "avio.h":
 #    int url_ferror(ByteIOContext* s)
-#    int url_feof(ByteIOContext* s) 
+#    int url_feof(ByteIOContext* s)
 
 
 ##################################################################
@@ -814,6 +834,7 @@ cdef class Track:
     cdef object observer
     cdef int support_truncated
     cdef int do_check_start
+    cdef int do_check_end
     cdef int reopen_codec_on_buffer_reset
 
     cdef __new__(Track self):
@@ -832,7 +853,13 @@ cdef class Track:
 
     def duration(self):
         """Return the duration of one track in PTS"""
+        if (self.stream.duration==0x8000000000000000):
+          raise KeyError
         return self.stream.duration
+
+    def _set_duration(self,x):
+        """Allows to set the duration to correct inconsistent information"""
+        self.stream.duration=x
 
     def duration_time(self):
         """ returns the duration of one track in seconds."""
@@ -849,6 +876,7 @@ cdef class Track:
         self.frame = avcodec_alloc_frame()
         self.start_time=self.stream.start_time
         self.do_check_start=0
+        self.do_check_end=0
 
 
     def init(self,observer=None, support_truncated=0,   **args):
@@ -868,7 +896,7 @@ cdef class Track:
         self.observer=None
         self.support_truncated=support_truncated
         for k in args.keys():
-            if k not in [ "skip_frame", "skip_loop_filter", "skip_idct", "hurry_up", "hurry_mode", "dct_algo", "idct_algo", "check_start" ]:
+            if k not in [ "skip_frame", "skip_loop_filter", "skip_idct", "hurry_up", "hurry_mode", "dct_algo", "idct_algo", "check_start" ,"check_end"]:
                 sys.stderr.write("warning unsupported arguments in stream initialization :"+k+"\n")
         if self.Codec == NULL:
             raise IOError("Unable to get decoder")
@@ -894,6 +922,9 @@ cdef class Track:
             self.CodecCtx.idct_algo=args["idct_algo"]
         if (not args.has_key("check_start") or args["check_start"]):
             self.do_check_start=1
+        if (not args.has_key("check_end") or args["check_end"]):
+            self.do_check_end=1
+
 
     def check_start(self):
         """ It seems that many file have incorrect initial time information.
@@ -912,6 +943,35 @@ cdef class Track:
                 #DEBUG("check start FAILED " + str(e))
                 pass
         else:
+            pass
+
+
+    def check_end(self):
+        """ It seems that many file have incorrect initial time information.
+            The best way to avoid offset in shifting is thus to check what
+            is the time of the beginning of the track.
+        """
+        if (self.do_check_end):
+            try:
+                self.vr.packetbufa.dts=self.vr.packetbufa.pts=self.vr.packetbufb.dts=self.vr.packetbufb.pts=0
+                self.seek_to_pts(0x00FFFFFFFFFFFFF)
+                self.vr.read_packet()
+                try:
+                   dx=self.duration()
+                except:
+                   dx=-1
+                newend=max(self.vr.packetbufa.dts,self.vr.packetbufa.pts,self.vr.packetbufb.dts)
+                sys.stderr.write("end time checked : pts = %d, declared was : %d\n"%(newend,dx))
+                assert((newend-self.start_time)>=0)
+                self._set_duration((newend-self.start_time))
+                self.vr.reset()
+                self.seek_to_pts(0)
+                self.do_check_end=0
+            except Exception,e:
+                DEBUG("check end FAILED " + str(e))
+                pass
+        else:
+            #DEBUG("no check end " )
             pass
 
     def set_observer(self, observer=None):
@@ -948,7 +1008,7 @@ cdef class Track:
             avcodec_close(self.CodecCtx)
         self.CodecCtx=NULL
 
-    def prepare_to_be_just_in_time(self):
+    def prepare_to_read_ahead(self):
         """
         In order to avoid delay during reading, our player try always
         to read a little bit of that is available ahead.
@@ -999,19 +1059,11 @@ cdef class Track:
 
             We are working on improving our seeking capabilities.
         """
-        #print "seeked pts :", pts
-        #sys.stderr.write( "seeking to PTS %d (start_time=%d (%x)) ?\n"%(pts,self.start_time, self.start_time))
 
         if (self.start_time!=AV_NOPTS_VALUE):
-            #if (pts<self.start_time):
-            #   print "seek before start_time / ignoring start time / seeking maybe invalid (MPEG TS ?)"
-            #    #pts+=self.stream.start_time
-            #else:
-            #  #pts-=self.start_time
             pts+=self.start_time
-            #  #pts+=(self.start_time*self.get_fps())
-            #  #pts+=(self.start_time*15)
-        #sys.stderr.write( "seeking to PTS %d (start_time=%d (%x)) \n"%(pts,self.start_time, self.start_time))
+
+
         self.vr.seek_to(pts)
 
 
@@ -1225,7 +1277,7 @@ cdef class AudioTrack(Track):
             except Queue_Empty:
                 pass
 
-    def prepare_to_be_just_in_time(self):
+    def prepare_to_read_ahead(self):
         """ This function is used internally to do some read ahead """
         self.__read_subsequent_audio()
 
@@ -1284,7 +1336,7 @@ cdef class VideoTrack(Track):
         The frames are put in a temporary pool with their presentation time.
         When the next image is queried the system look at for the image the most likely to be the next one...
     """
-    
+
     cdef int outputmode
     cdef int pixel_format
     cdef int frameno
@@ -1361,7 +1413,7 @@ cdef class VideoTrack(Track):
 
     def reset_buffers(self):
         """ Reset the internal buffers. """
-        
+
         Track.reset_buffers(self)
         for x in self.videoframebank:
             self.videoframebuffers.append(x[2])
@@ -1370,7 +1422,7 @@ cdef class VideoTrack(Track):
 
     def print_buffer_stats(self):
         """ Display some informations on internal buffer system """
-        
+
         print "video buffers :", len(self.videoframebank), " used out of ", self.videoframebanksz
 
 
@@ -1408,7 +1460,7 @@ cdef class VideoTrack(Track):
         ret = avcodec_decode_video(self.CodecCtx,self.frame,&frameFinished,packet.data,packet.size)
         if ret < 0:
             #DEBUG("IOError")
-            raise IOError("Unable to decode video picture: %d" % ret)
+            raise IOError("Unable to decode video picture: %d" % (ret,))
         if (frameFinished):
             #DEBUG("frame finished")
             self.on_frame_finished()
@@ -1423,7 +1475,7 @@ cdef class VideoTrack(Track):
 
     def get_next_frame(self):
         """ reads the next frame and observe it if necessary"""
-        
+
         #DEBUG("videotrack get_next_frame")
         self.__next_frame()
         #DEBUG("__next_frame done")
@@ -1440,7 +1492,7 @@ cdef class VideoTrack(Track):
 
     def get_current_frame(self):
         """ return the image with the smallest time index among the not yet displayed decoded frame """
-        
+
         am=self.safe_smallest_videobank_time()
         return self.videoframebank[am]
 
@@ -1450,7 +1502,7 @@ cdef class VideoTrack(Track):
         """
             This function is normally not aimed to be called by user it essentially does a conversion in-between the picture that is being decoded...
         """
-        
+
         cdef AVFrame *pFrameRes
         cdef int numBytes
         if self.outputmode==OUTPUTMODE_NUMPY:
@@ -1480,7 +1532,6 @@ cdef class VideoTrack(Track):
         else:
             raise Exception, "Not yet implemented" # TODO : <
 
-    
 
 
     def on_frame_finished(self):
@@ -1518,7 +1569,7 @@ cdef class VideoTrack(Track):
 
     def prefill_videobank(self):
         """ Use for read ahead : fill in the video buffer """
-        
+
         if (len(self.videoframebank)<self.videoframebanksz):
             self.__next_frame()
 
@@ -1526,7 +1577,7 @@ cdef class VideoTrack(Track):
 
     def refill_videobank(self,no=0):
         """ empty (partially) the videobank and refill it """
-        
+
         if not no:
             for x in self.videoframebank:
                 self.videoframebuffers.extend(x[2])
@@ -1540,7 +1591,7 @@ cdef class VideoTrack(Track):
 
     def smallest_videobank_time(self):
         """ returns the index of the frame in the videoframe bank that have the smallest time index """
-        
+
         mi=0
         if (len(self.videoframebank)==0):
             raise Exception,"empty"
@@ -1550,10 +1601,10 @@ cdef class VideoTrack(Track):
                 mi=i
                 vi=self.videoframebank[mi][0]
         return mi
-    
 
-       
-    def prepare_to_be_just_in_time(self):
+
+
+    def prepare_to_read_ahead(self):
         """ generic function called after seeking to prepare the buffer """
         self.prefill_videobank()
 
@@ -1566,7 +1617,7 @@ cdef class VideoTrack(Track):
         while True:
             self.__next_frame()
 #           if (self.debug_seek):
-#             sys.stderr.write("finalize_seek : %d\n"%self.pts)
+#             sys.stderr.write("finalize_seek : %d\n"%(self.pts,))
             if self.pts >= rtargetPts:
                 break
 
@@ -1590,7 +1641,7 @@ cdef class VideoTrack(Track):
 
     cdef AVFrame *_convert_to(self,AVPicture *frame, int pixformat=-1):
         """ Convert AVFrame to a specified format (Intended for copy) """
-        
+
         cdef AVFrame *pFrame
         cdef int numBytes
         cdef char *rgb_buffer
@@ -1620,7 +1671,7 @@ cdef class VideoTrack(Track):
 
     cdef AVFrame *_convert_withbuf(self,AVPicture *frame,char *buf,  int pixformat=-1):
         """ Convert AVFrame to a specified format (Intended for copy)  """
-        
+
         cdef AVFrame *pFramePixFormat
         cdef int numBytes
         cdef int width,height
@@ -1686,6 +1737,45 @@ cdef class VideoTrack(Track):
         return self.CodecCtx.frame_number
 
 
+    #def write_picture():
+        #cdef int out_size
+        #if (self.cframe == None):
+                #self.CodecCtx.bit_rate = self.bitrate;
+                #self.CodecCtx.width = self.width;
+                #self.CodecCtx.height = self.height;
+                #CodecCtx.frame_rate = (int)self.frate;
+                #c->frame_rate_base = 1;
+                #c->gop_size = self.gop;
+                #c->me_method = ME_EPZS;
+                
+                #if (avcodec_open(c, codec) < 0):
+                #        raise Exception, "Could not open codec"
+
+                # Write header
+                #av_write_header(self.oc);
+
+                # alloc image and output buffer
+                #pict = &pic1;
+                #avpicture_alloc(pict,PIX_FMT_YUV420P, c->width,c->height);
+
+                #outbuf_size = 1000000;
+                #outbuf = "\0"*outbuf_size
+                #avframe->linesize[0]=c->width*3;
+
+
+        #avframe->data[0] = pixmap_;
+
+        ### TO UPDATE
+        #img_convert(pict,PIX_FMT_YUV420P, (AVPicture*)avframe, PIX_FMT_RGB24,c->width, c->height);
+
+
+        ## ENCODE
+        #out_size = avcodec_encode_video(c, outbuf, outbuf_size, (AVFrame*)pict);
+
+        #if (av_write_frame(oc, 0, outbuf, out_size)):
+        #        raise Exception, "Error while encoding picture"
+        #cframe+=1
+
 
 ###############################################################################
 ## The Reader Class
@@ -1698,10 +1788,10 @@ cdef class FFMpegReader(AFFMpegReader):
     """
     cdef object default_audio_track
     cdef object default_video_track
-    cdef int with_jit
+    cdef int with_readahead
     cdef unsigned long long int seek_before_security_interval
 
-    def __new__(self,with_jit=False,seek_before=4000):
+    def __new__(self,with_readahead=True,seek_before=4000):
         self.filename = None
         self.tracks=[]
         self.ctracks=NULL
@@ -1717,7 +1807,7 @@ cdef class FFMpegReader(AFFMpegReader):
         self.errjmppts=0
         self.default_audio_track=None
         self.default_video_track=None
-        self.with_jit=with_jit
+        self.with_readahead=with_readahead
         self.seek_before_security_interval=seek_before
 
     def __dealloc__(self):
@@ -1738,7 +1828,7 @@ cdef class FFMpegReader(AFFMpegReader):
     def dump(self):
         dump_format(self.FormatCtx,0,self.filename,0)
 
-    def open(self,char *filename,track_selector=None):
+    def open(self,char *filename,track_selector=None,mode="r"):
 
         #
         # Open the Multimedia File
@@ -1748,7 +1838,46 @@ cdef class FFMpegReader(AFFMpegReader):
         if ret != 0:
             raise IOError("Unable to open file %s" % filename)
         self.filename = filename
-        self.__finalize_open(track_selector)
+        if (mode=="r"):
+            self.__finalize_open(track_selector)
+        else:
+            self.__finalize_open_write()
+
+
+    def __finalize_open_write(self):
+        """
+         EXPERIMENTAL ! 
+        """
+        cdef  AVFormatContext * oc
+        oc = avformat_alloc_context()
+        # Guess file format with file extention
+        oc.oformat = guess_format(NULL, filename_, NULL);
+        if (oc.oformat==NULL):
+            raise Exception, "Unable to find output format for %s\n"
+        # Alloc priv_data for format
+        oc.priv_data = av_mallocz(oc.oformat.priv_data_size);
+        #avframe = avcodec_alloc_frame();
+
+
+
+        # Create the video stream on output AVFormatContext oc
+        #self.st = av_new_stream(oc,0)
+        # Alloc the codec to the new stream
+        #c = &self.st.codec
+        # find the video encoder
+
+        #codec = avcodec_find_encoder(oc.oformat.video_codec);
+        #if (self.st.codec==None):
+        #    raise Exception,"codec not found\n"
+        #codec_name = <char *> codec.name;
+
+        # Create the output file
+        url_fopen(&oc.pb, filename_, URL_WRONLY)
+
+        # last part of init will be set when first frame write()
+        # because we need user parameters like size, bitrate...
+        self.mode = "w"
+
 
     def __finalize_open(self, track_selector=None):
         cdef AVCodecContext * CodecCtx
@@ -1761,7 +1890,7 @@ cdef class FFMpegReader(AFFMpegReader):
             track_selector=TS_AUDIOVIDEO
         ret = av_find_stream_info(self.FormatCtx)
         if ret < 0:
-            raise IOError("Unable to find Track info: %d" % ret)
+            raise IOError("Unable to find Track info: %d" % (ret,))
 
 
         self.pts=0
@@ -1815,6 +1944,20 @@ cdef class FFMpegReader(AFFMpegReader):
             self.default_audio_track.reset_tps(self.default_video_track.get_fps())
         for t in self.tracks:
             t.check_start() ### this is done only if asked
+            savereadahead=self.with_readahead
+            savebsi=self.seek_before_security_interval
+            self.seek_before_security_interval=0
+            self.with_readahead=0
+            t.check_end()
+            self.with_readahead=savereadahead
+            self.seek_before_security_interval=savebsi
+        try:
+          if (self.tracks[0].duration()<0):
+              sys.stderr.write("WARNING : inconsistent file duration %x\n"%(self.tracks[0].duration() ,))
+              new_duration=-self.tracks[0].duration()
+              self.tracks[0]._set_duration(new_duration)
+        except KeyError:
+          pass
 
     def close(self):
         if (self.FormatCtx!=NULL):
@@ -1836,7 +1979,7 @@ cdef class FFMpegReader(AFFMpegReader):
         while not packet_processed:
                 #ret = av_read_frame(self.FormatCtx,self.packet)
                 #if ret < 0:
-                #    raise IOError("Unable to read frame: %d" % ret)
+                #    raise IOError("Unable to read frame: %d" % (ret,))
             if (self.prepacket==<AVPacket *>None):
                 self.prepacket=&self.packetbufa
                 self.packet=&self.packetbufb
@@ -1921,7 +2064,7 @@ cdef class FFMpegReader(AFFMpegReader):
             #      print "solved : ret=",ret
             #      break
             #if ret < 0:
-            raise IOError("Unable to read frame: %d" % ret)
+            raise IOError("Unable to read frame: %d" % (ret,))
         #DEBUG("/prefetch_packet")
 
     def read_until_next_frame(self, calltrack=0,maxerrs=10, maxread=10):
@@ -1959,8 +2102,10 @@ cdef class FFMpegReader(AFFMpegReader):
         #DEBUG("/read until next frame")
         return True
 
+
     def get_tracks(self):
         return self.tracks
+
 
     def seek_to(self, pts):
         """
@@ -1974,13 +2119,22 @@ cdef class FFMpegReader(AFFMpegReader):
         #ppts=pts
         #print ppts, pts
         #DEBUG("CALLING AV_SEEK_FRAME")
+
+        #try:
+        #  if (pts > self.tracks[0].duration()):
+        #        raise IOError,"Cannot seek after the end...\n"
+        #except KeyError:
+        #  pass
+
+
         ret = av_seek_frame(self.FormatCtx,-1,ppts,  AVSEEK_FLAG_BACKWARD)#|AVSEEK_FLAG_ANY)
         #DEBUG("AV_SEEK_FRAME DONE")
         if ret < 0:
             raise IOError("Unable to seek: %d" % ret)
         if (self.io_context!=NULL):
             #DEBUG("using FSEEK  ")
-            url_fseek(&self.FormatCtx.pb, self.FormatCtx.data_offset, SEEK_SET);
+            #used to have & on pb
+            url_fseek(self.FormatCtx.pb, self.FormatCtx.data_offset, SEEK_SET);
         ## ######################################
         ## Flush buffer
         ## ######################################
@@ -1993,18 +2147,29 @@ cdef class FFMpegReader(AFFMpegReader):
         ## do set up exactly all tracks
         ## ######################################
 
-        if (self.seek_before_security_interval):
+        try:
+          if (self.seek_before_security_interval):
             #DEBUG("finalize seek    ")
             self.disable_observers()
             self._finalize_seek_to(pts)
             self.enable_observers()
+        except KeyboardInterrupt:
+           raise
+        except:
+           DEBUG("Exception during finalize_seek")
 
         ## ######################################
-        ## band buffers
+        ## read ahead buffers
         ## ######################################
-        if self.with_jit:
-            #DEBUG("preparing JIT  ")
-            self.prepare_to_be_just_in_time()
+        if self.with_readahead:
+            try:
+                #DEBUG("readahead")
+                self.prepare_to_read_ahead()
+                #DEBUG("/readahead")
+            except KeyboardInterrupt:
+                raise
+            except:
+                DEBUG("Exception during read ahead")
 
 
         #DEBUG("/seek")
@@ -2026,9 +2191,10 @@ cdef class FFMpegReader(AFFMpegReader):
         av_read_frame_flush(self.FormatCtx);
         ret = av_seek_frame(self.FormatCtx,-1,byte,  AVSEEK_FLAG_BACKWARD|AVSEEK_FLAG_BYTE)#|AVSEEK_FLAG_ANY)
         if ret < 0:
-            raise IOError("Unable to seek: %d" % ret)
+            raise IOError("Unable to seek: %d" % (ret,))
         if (self.io_context!=NULL):
-            url_fseek(&self.FormatCtx.pb, self.FormatCtx.data_offset, SEEK_SET);
+            # used to have & here
+            url_fseek(self.FormatCtx.pb, self.FormatCtx.data_offset, SEEK_SET);
         ## ######################################
         ## Flush buffer
         ## ######################################
@@ -2046,21 +2212,22 @@ cdef class FFMpegReader(AFFMpegReader):
         ## ##########################################################
         ## Put the buffer in a states that would make reading easier
         ## ##########################################################
-        self.prepare_to_be_just_in_time()
+        self.prepare_to_read_ahead()
 
 
     def __getitem__(self,int pos):
-        self.seek_to((pos/30.)*AV_TIME_BASE)
-        sys.stderr.write("Trying to get frame\n")
+        fps=self.tracks[0].get_fps()
+        self.seek_to((pos/fps)*AV_TIME_BASE)
+        #sys.stderr.write("Trying to get frame\n")
         ri=self.get_current_frame()
-        sys.stderr.write("Ok\n")
-        sys.stderr.write("ri=%s\n"%(repr(ri)))
+        #sys.stderr.write("Ok\n")
+        #sys.stderr.write("ri=%s\n"%(repr(ri)))
         return ri
 
-    def prepare_to_be_just_in_time(self):
+    def prepare_to_read_ahead(self):
         """ fills in all buffers in the tracks so that all necessary datas are available"""
         for  s in self.tracks:
-            s.prepare_to_be_just_in_time()
+            s.prepare_to_read_ahead()
 
     def step(self):
         self.tracks[0].get_next_frame()
@@ -2083,13 +2250,12 @@ cdef class FFMpegReader(AFFMpegReader):
             c=c+1
 
     def duration(self):
+        if (self.FormatCtx.duration==0x8000000000000000):
+          raise KeyError
         return self.FormatCtx.duration
 
     def duration_time(self):
         return float(self.duration())/ (<float>AV_TIME_BASE)
-
-
-
 
 
 cdef class FFMpegStreamReader(FFMpegReader):
