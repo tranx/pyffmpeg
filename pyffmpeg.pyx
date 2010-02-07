@@ -964,7 +964,7 @@ cdef class Track:
                 sys.stderr.write("end time checked : pts = %d, declared was : %d\n"%(newend,dx))
                 assert((newend-self.start_time)>=0)
                 self._set_duration((newend-self.start_time))
-                self.vr.reset()
+                self.vr.reset_buffers()
                 self.seek_to_pts(0)
                 self.do_check_end=0
             except Exception,e:
@@ -2173,6 +2173,10 @@ cdef class FFMpegReader(AFFMpegReader):
 
 
         #DEBUG("/seek")
+
+    def reset_buffers(self):
+        for  s in self.tracks:
+            s.reset_buffers()
 
     def _finalize_seek_to(self, pts):
         """

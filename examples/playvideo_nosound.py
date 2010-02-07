@@ -59,7 +59,7 @@ TS_VIDEO_BGR24={ 'video1':(0, -1, {'pixel_format':PixelFormats.BGR24})}
 
 ## create the reader object
 
-mp=FFMpegReader()
+mp=FFMpegReader(0,False)
 
 
 ## open an audio video file
