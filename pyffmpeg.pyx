@@ -74,6 +74,7 @@ cdef enum:
 
 cdef extern from "string.h":
     memcpy(void * dst, void * src, unsigned long sz)
+    memset(void * dst, unsigned char c, unsigned long sz)
 
 cdef extern from "Python.h":
     ctypedef int size_t
@@ -89,6 +90,7 @@ cdef extern from "Python.h":
 #cimport numpy as np
 #cdef extern from "numpy/arrayobject.h":
 #    void *PyArray_DATA(np.ndarray arr)
+AVPROBE_PADDING_SIZE=32  
 
 cdef extern from "libavutil/mathematics.h":
     int64_t av_rescale(int64_t a, int64_t b, int64_t c)
@@ -96,13 +98,15 @@ cdef extern from "libavutil/mathematics.h":
 cdef extern from "libavformat/avio.h":
     struct ByteIOContext:
         pass
-
     ctypedef long long int  offset_t
+
+    int get_buffer(ByteIOContext *s, unsigned char *buf, int size)
     int url_ferror(ByteIOContext *s)
     int url_feof(ByteIOContext *s)
     int url_fopen(ByteIOContext **s,  char *filename, int flags)
+    int url_setbufsize(ByteIOContext *s, int buf_size)
     int url_fclose(ByteIOContext *s)
-    offset_t url_fseek(ByteIOContext *s, offset_t offset, int whence)
+    long long int url_fseek(ByteIOContext *s, long long int offset, int whence)
     ByteIOContext *av_alloc_put_byte(
                   unsigned char *buffer,
                   int buffer_size,
@@ -115,7 +119,9 @@ cdef extern from "libavformat/avio.h":
 
 
 cdef extern from "libavutil/mem.h":
+        void *av_realloc(void * ptr, unsigned int size) 
         void *av_mallocz(unsigned int size) 
+        void av_freep(void *ptr)
 
 cdef extern from "libavutil/avutil.h":
     cdef enum PixelFormat:
@@ -481,7 +487,15 @@ cdef extern from "libavformat/avformat.h":
         pass
 
     struct AVInputFormat:
-        pass
+       char *name
+       char *long_name
+       char *mime_type
+       char *extensions
+       int priv_data_size
+       int video_codec
+       int audio_codec
+       int flags
+       pass
 
     struct AVOutputFormat: 
        char *name
@@ -599,6 +613,7 @@ cdef extern from "libavformat/avformat.h":
 
     int av_index_search_timestamp(AVStream *st, int64_t timestamp, int flags)
     AVInputFormat *av_probe_input_format(AVProbeData *pd, int is_opened)
+    AVInputFormat *av_probe_input_format2(AVProbeData *pd, int is_opened,int * score)
     AVFormatContext *  avformat_alloc_context()
     AVOutputFormat *guess_format(char *short_name, char *filename,char *mime_type)
 
@@ -922,8 +937,8 @@ cdef class Track:
             self.CodecCtx.idct_algo=args["idct_algo"]
         if (not args.has_key("check_start") or args["check_start"]):
             self.do_check_start=1
-        if (not args.has_key("check_end") or args["check_end"]):
-            self.do_check_end=1
+        if (args.has_key("check_end") and args["check_end"]):
+            self.do_check_end=0
 
 
     def check_start(self):
@@ -1828,20 +1843,88 @@ cdef class FFMpegReader(AFFMpegReader):
     def dump(self):
         dump_format(self.FormatCtx,0,self.filename,0)
 
-    def open(self,char *filename,track_selector=None,mode="r"):
+    #def open_old(self,char *filename,track_selector=None,mode="r"):
 
         #
         # Open the Multimedia File
         #
 
-        ret = av_open_input_file(&self.FormatCtx,filename,NULL,0,NULL)
-        if ret != 0:
-            raise IOError("Unable to open file %s" % filename)
+#        ret = av_open_input_file(&self.FormatCtx,filename,NULL,0,NULL)
+#        if ret != 0:
+#            raise IOError("Unable to open file %s" % filename)
+#        self.filename = filename
+#        if (mode=="r"):
+#            self.__finalize_open(track_selector)
+#        else:
+#            self.__finalize_open_write()
+
+
+
+
+    def open(self,char *filename,track_selector=None,mode="r",buf_size=1024):       
+        cdef int ret
+        cdef int score
+        cdef AVInputFormat * fmt
+        cdef AVProbeData pd
+        fmt=NULL
+        pd.filename=filename
+        pd.buf=NULL
+        pd.buf_size=0
+
         self.filename = filename
+        self.FormatCtx = avformat_alloc_context()
+
+        if (mode=="w"):
+          raise Exception,"Not yet supported sorry"
+          self.FormatCtx.oformat = guess_format(NULL, filename_, NULL);
+          if (self.FormatCtx.oformat==NULL):
+              raise Exception, "Unable to find output format for %s\n"
+
+
+        #self.FormatCtx.priv_data = av_mallocz(self.FormatCtx.oformat.priv_data_size);
+        if (fmt==NULL):
+             fmt=av_probe_input_format(&pd,0)
+        print (<long>fmt)
+        if (fmt==NULL) or (not (fmt.flags & AVFMT_NOFILE)):
+           ret=url_fopen(&self.FormatCtx.pb, filename, 0)
+           if ret < 0:
+               raise IOError("Unable to open file %s (url_fopen)" % filename)
+           if (buf_size>0):
+               url_setbufsize(self.FormatCtx.pb,buf_size)
+           #raise Exception, "Not Yet Implemented"
+           for log2_probe_size in range(11,20):
+               probe_size=1<<log2_probe_size
+               #score=(AVPROBE_SCORE_MAX/4 if log2_probe_size!=20 else 0)
+               pd.buf=<unsigned char *>av_realloc(pd.buf,probe_size+AVPROBE_PADDING_SIZE)
+               pd.buf_size=get_buffer(self.FormatCtx.pb,pd.buf,probe_size)
+               memset(pd.buf+pd.buf_size,0,AVPROBE_PADDING_SIZE)
+               if (url_fseek(self.FormatCtx.pb,0,SEEK_SET)):
+                  url_fclose(self.FormatCtx.pb)
+                  ret=url_fopen(&self.FormatCtx.pb, filename, 0)
+                  if (ret < 0):
+                    raise IOError("Unable to open file %s (url_fopen with but)" % filename)
+               fmt=av_probe_input_format(&pd,1)#,&score)
+               if (fmt!=NULL):
+                  break
+       
+        assert(fmt!=NULL) 
+        self.FormatCtx.iformat=fmt
+
+
         if (mode=="r"):
+            ret = av_open_input_stream(&self.FormatCtx,self.FormatCtx.pb,filename,self.FormatCtx.iformat,NULL)
+            if ret != 0:
+              raise IOError("Unable to open stream %s" % filename)
             self.__finalize_open(track_selector)
-        else:
+        elif (mode=="w"):
+            ret=url_fopen(&self.FormatCtx.pb, filename, 1)
+            if ret != 0:
+               raise IOError("Unable to open file %s" % filename)
             self.__finalize_open_write()
+        else:
+           raise ValueError, "Unknown Mode"
+
+
 
 
     def __finalize_open_write(self):
@@ -2262,46 +2345,46 @@ cdef class FFMpegReader(AFFMpegReader):
         return float(self.duration())/ (<float>AV_TIME_BASE)
 
 
-cdef class FFMpegStreamReader(FFMpegReader):
-    """
-    This contains some experimental code not meant to be used for the moment
-    """
-    def open_url(self,  char *filename,track_selector=None):
-        cdef AVInputFormat *format
-        cdef AVProbeData probe_data
-        cdef unsigned char tbuffer[65536]
-        cdef unsigned char tbufferb[65536]
+#cdef class FFMpegStreamReader(FFMpegReader):
+   # """
+   # This contains some experimental code not meant to be used for the moment
+    #"""
+#    def open_url(self,  char *filename,track_selector=None):
+#        cdef AVInputFormat *format
+#        cdef AVProbeData probe_data
+#        cdef unsigned char tbuffer[65536]
+#        cdef unsigned char tbufferb[65536]
 
         #self.io_context=av_alloc_put_byte(tbufferb, 65536, 0,<void *>0,<void *>0,<void *>0,<void *>0)  #<ByteIOContext*>PyMem_Malloc(sizeof(ByteIOContext))
         #IOString ios
-        URL_RDONLY=0
-        if (url_fopen(&self.io_context, filename,URL_RDONLY ) < 0):
-            raise IOError, "unable to open URL"
-        print "Y"
+#       URL_RDONLY=0
+#        if (url_fopen(&self.io_context, filename,URL_RDONLY ) < 0):
+#            raise IOError, "unable to open URL"
+#        print "Y"
 
-        url_fseek(self.io_context, 0, SEEK_SET);
+#        url_fseek(self.io_context, 0, SEEK_SET);
 
-        probe_data.filename = filename;
-        probe_data.buf = tbuffer;
-        probe_data.buf_size = 65536;
+#        probe_data.filename = filename;
+#        probe_data.buf = tbuffer;
+#        probe_data.buf_size = 65536;
 
         #probe_data.buf_size = get_buffer(&io_context, buffer, sizeof(buffer));
         #
 
-        url_fseek(self.io_context, 65535, SEEK_SET);
+#        url_fseek(self.io_context, 65535, SEEK_SET);
         #
-        format = av_probe_input_format(&probe_data, 1);
+        #format = av_probe_input_format(&probe_data, 1);
         #
         #            if (not format) :
         #                url_fclose(&io_context);
         #                raise IOError, "unable to get format for URL"
 
-        if (av_open_input_stream(&self.FormatCtx, self.io_context, NULL, NULL, NULL)) :
-            url_fclose(self.io_context);
-            raise IOError, "unable to open input stream"
-        self.filename = filename
-        self.__finalize_open(track_selector)
-        print "Y"
+#        if (av_open_input_stream(&self.FormatCtx, self.io_context, NULL, NULL, NULL)) :
+#            url_fclose(self.io_context);
+#            raise IOError, "unable to open input stream"
+#        self.filename = filename
+#        self.__finalize_open(track_selector)
+#        print "Y"
 
 
 
