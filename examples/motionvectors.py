@@ -10,8 +10,8 @@ from PyQt4 import QtCore
 from PyQt4 import QtGui
 
 import sys, numpy
-#import alsaaudio
 
+  
 try:
     LazyDisplayQt__imgconvarray={
                       1:QtGui.QImage.Format_Indexed8,
@@ -27,6 +27,7 @@ except:
 qapp = QtGui.QApplication(sys.argv)
 qapp.processEvents()
 
+
 class LazyDisplayQt(QtGui.QMainWindow):
         imgconvarray=LazyDisplayQt__imgconvarray
         def __init__(self, *args):
@@ -37,6 +38,8 @@ class LazyDisplayQt(QtGui.QMainWindow):
         def __del__(self):
             self.hide()
         def f(self,thearray):
+            #print "ARRAY",
+            #print thearray
             self._i=thearray.astype(numpy.uint8).copy('C')
             self.i=QtGui.QImage(self._i.data,self._i.shape[1],self._i.shape[0],self.imgconvarray[self._i.shape[2]])
             self.update()
@@ -50,50 +53,37 @@ class LazyDisplayQt(QtGui.QMainWindow):
             self.p.end()
 
 
-TS_VIDEO_RGB24={ 'video1':(0, -1, {'pixel_format':PixelFormats.RGB24,'videoframebanksz':1, 'skip_frame':32})}#, 'audio1':(1,-1,{}) }
-TS_VIDEO_BGR24={ 'video1':(0, -1, {'pixel_format':PixelFormats.BGR24,'videoframebanksz':1, 'skip_frame':32})}#, 'audio1':(1,-1,{})}
-TS_VIDEO_GRAY8={ 'video1':(0, -1, {'pixel_format':PixelFormats.GRAY8,'videoframebanksz':1, 'skip_frame':32})}#, 'audio1':(1,-1,{})}
+TS_VIDEO_RGB24={ 'video1':(0, -1, {'pixel_format':PixelFormats.RGB24,'with_motion_vectors':1})}
+TS_VIDEO_BGR24={ 'video1':(0, -1, {'pixel_format':PixelFormats.BGR24,'with_motion_vectors':1})}
 
 
 ## create the reader object
-mp=FFMpegReader()
+
+mp=FFMpegReader(0,False)
 
 
 ## open an audio video file
+
 vf=sys.argv[1]
+#vf="/home/tranx/conan1.flv"
+sys.stderr.write("opening\n")
 mp.open(vf,TS_VIDEO_RGB24)
+print "opened"
 tracks=mp.get_tracks()
 
+
 ## connect video and audio to their respective device
+
 ld=LazyDisplayQt()
-tt=0
+tracks[0].set_observer(ld.f)
 
-def obs(x):
-   global tt
-   #print tracks[0].get_current_frame_type()
-   #print tracks[0].get_current_frame_pts()/1000000
-   tt+=1
-   if (tt%100==0):
-     print tracks[0].get_cur_pts()/1000000
-     if (x.shape[2]==1):
-       ld.f(x.reshape(x.shape[0],x.shape[1],1).repeat(3,axis=2))
-     else:
-       ld.f(x)
-   
- 
-tracks[0].set_observer(obs)
+print "duration=",mp.duration()
 
-import time
-print time.clock()
-dur=mp.duration()/1000000
-print "Duration = ",dur
-try:
-   mp.run()
-except Exception, e:
-  print "Exception e=", e
-  print "Processing time=",time.clock()
-  print tt," keyframes"
-  print (dur*30.)/tt ," frames per keyframe"
-  print (dur)/time.clock() ," times faster than rt"
+tracks[0].seek_to_seconds(10)
+print tracks[0].get_current_frame()
+
+## play the movie !
+
+#mp.run()
 
 
