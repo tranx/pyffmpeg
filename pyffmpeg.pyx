@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 
 """
 # #######################################################################################
@@ -1254,6 +1255,7 @@ cdef class AudioTrack(Track):
         lf=2
         audio_size=self.rdata_size*lf
         first=1
+        #DEBUG( "process packet size=%s pts=%s dts=%s "%(str(pkt.size),str(pkt.pts),str(pkt.dts)))
         while (audio_size>=0):
             audio_size = self.apd.audio_decode_frame(self.CodecCtx,
                                       <uint8_t *> <unsigned long long> (PyArray_DATA_content( self.audio_buf)),
@@ -1497,8 +1499,8 @@ cdef class VideoTrack(Track):
     cdef process_packet(self, AVPacket *packet):
 
         cdef int frameFinished=0
-        #DEBUG( "process packet size=%s pts=%s dts=%s"%(str(packet.size),str(packet.pts),str(packet.dts)))
         ret = avcodec_decode_video(self.CodecCtx,self.frame,&frameFinished,packet.data,packet.size)
+        #DEBUG( "process packet size=%s pts=%s dts=%s keyframe=%d picttype=%d"%(str(packet.size),str(packet.pts),str(packet.dts),self.frame.key_frame,self.frame.pict_type))
         if ret < 0:
                 #DEBUG("IOError")
             raise IOError("Unable to decode video picture: %d" % (ret,))
@@ -2086,9 +2088,37 @@ cdef class FFMpegReader(AFFMpegReader):
             av_close_input_file(self.FormatCtx)
             self.FormatCtx=NULL
 
-    cdef read_packet(self):
+
+    cdef __prefetch_packet(self):
+        """ this function is used for prefetching a packet
+            this is used when we want read until something new happen on a specified channel
+        """
+        #DEBUG("prefetch_packet")
+        ret = av_read_frame(self.FormatCtx,self.prepacket)
+        if ret < 0:
+            #for xerrcnts in range(5,1000):
+            #  if (not self.errjmppts):
+            #      self.errjmppts=self.tracks[0].get_cur_pts()
+            #  no=self.errjmppts+xerrcnts*(AV_TIME_BASE/50)
+            #  sys.stderr.write("Unable to read frame:trying to skip some packet and trying again.."+str(no)+","+str(xerrcnts)+"...\n")
+            #  av_seek_frame(self.FormatCtx,-1,no,0)
+            #  ret = av_read_frame(self.FormatCtx,self.prepacket)
+            #  if (ret!=-5):
+            #      self.errjmppts=no
+            #      print "solved : ret=",ret
+            #      break
+            #if ret < 0:
+            raise IOError("Unable to read frame: %d" % (ret,))
+        #DEBUG("/prefetch_packet")
+
+    cdef read_packet_buggy(self):
+        """ 
+         This function is supposed to make things nicer...
+         However, it is buggy right now and I have to check 
+         whether it is sitll necessary... So it will be re-enabled ontime...
+        """
         cdef bint packet_processed=False
-        #DEBUG("read_packet")
+        #DEBUG("read_packet %d %d"%(long(<long int>self.packet),long(<long int>self.prepacket)))
         while not packet_processed:
                 #ret = av_read_frame(self.FormatCtx,self.packet)
                 #if ret < 0:
@@ -2098,11 +2128,64 @@ cdef class FFMpegReader(AFFMpegReader):
                 self.packet=&self.packetbufb
                 self.__prefetch_packet()
             self.packet=self.prepacket
+            if (self.packet==&self.packetbufa): 
+              self.prepacket=&self.packetbufb
+            else:
+              self.prepacket=&self.packetbufa
             #DEBUG("...PRE..")
             self.__prefetch_packet()
+            #DEBUG("packets %d %d"%(long(<long int>self.packet),long(<long int>self.prepacket)))
             packet_processed=self.process_current_packet()
         #DEBUG("/read_packet")
 
+    cdef read_packet(self):
+        self.prepacket=&self.packetbufb
+        ret = av_read_frame(self.FormatCtx,self.prepacket)
+        if ret < 0:
+            raise IOError("Unable to read frame: %d" % (ret,))
+        self.packet=self.prepacket
+        packet_processed=self.process_current_packet()
+
+
+    def process_current_packet(self):
+        """ This function implements the demuxes.
+            It dispatch the packet to the correct track processor.
+             
+            Limitation : TODO: This function is to be improved to support more than audio and  video tracks.
+        """
+        cdef Track ct
+        cdef VideoTrack vt
+        cdef AudioTrack at
+        #DEBUG("process_current_packet")
+        processed=False
+        for s in self.tracks:
+            ct=s ## does passing through a pointer solves virtual issues...
+            #DEBUG("track : %s = %s ??" %(ct.no,self.packet.stream_index))
+            if (ct.no==self.packet.stream_index):
+                #ct.process_packet(self.packet)
+                ## I don't know why it seems that Windows Cython have problem calling the correct virtual function
+                ##
+                ##
+                if ct.CodecCtx.codec_type==CODEC_TYPE_VIDEO:
+                    processed=True
+                    vt=ct
+                    vt.process_packet(self.packet)
+                elif ct.CodecCtx.codec_type==CODEC_TYPE_AUDIO:
+                    processed=True
+                    at=ct
+                    at.process_packet(self.packet)
+                else:
+                    raise Exception, "Unknown codec type"
+                    #ct.process_packet(self.packet)
+                #DEBUG("/process_current_packet (ok)")
+                av_free_packet(self.packet)
+                self.packet=NULL
+                return True
+        #DEBUG("A packet tageted to track %d has not been processed..."%(self.packet.stream_index))
+        #DEBUG("/process_current_packet (not processed !!)")
+        av_free_packet(self.packet)
+        self.packet=NULL
+        return False
 
     def disable_observers(self):
         self.observers_enabled=False
@@ -2126,59 +2209,6 @@ cdef class FFMpegReader(AFFMpegReader):
         except:
             raise IOError,"File not correctly opened"
 
-    def process_current_packet(self):
-        """ dispatch the packet to the correct track processor """
-        cdef Track ct
-        cdef VideoTrack vt
-        cdef AudioTrack at
-        #DEBUG("process_current_packet")
-        for s in self.tracks:
-            ct=s ## does passing through a pointer solves virtual issues...
-            #DEBUG("track : %s = %s ??" %(ct.no,self.packet.stream_index))
-            if (ct.no==self.packet.stream_index):
-                #ct.process_packet(self.packet)
-                ## I don't know why it seems that Windows Cython have problem calling the correct virtual function
-                ##
-                ##
-                if ct.CodecCtx.codec_type==CODEC_TYPE_VIDEO:
-                    vt=ct
-                    vt.process_packet(self.packet)
-                elif ct.CodecCtx.codec_type==CODEC_TYPE_AUDIO:
-                    at=ct
-                    at.process_packet(self.packet)
-                else:
-                    raise Exception, "Unknown codec type"
-                    #ct.process_packet(self.packet)
-                #DEBUG("/process_current_packet (ok)")
-                av_free_packet(self.packet)
-                self.packet=NULL
-                return True
-        #DEBUG("/process_current_packet (not processed !!)")
-        av_free_packet(self.packet)
-        self.packet=NULL
-        return False
-
-    def __prefetch_packet(self):
-        """ this function is used for prefetching a packet
-            this is used when we want read until something new happen on a specified channel
-        """
-        #DEBUG("prefetch_packet")
-        ret = av_read_frame(self.FormatCtx,self.prepacket)
-        if ret < 0:
-            #for xerrcnts in range(5,1000):
-            #  if (not self.errjmppts):
-            #      self.errjmppts=self.tracks[0].get_cur_pts()
-            #  no=self.errjmppts+xerrcnts*(AV_TIME_BASE/50)
-            #  sys.stderr.write("Unable to read frame:trying to skip some packet and trying again.."+str(no)+","+str(xerrcnts)+"...\n")
-            #  av_seek_frame(self.FormatCtx,-1,no,0)
-            #  ret = av_read_frame(self.FormatCtx,self.prepacket)
-            #  if (ret!=-5):
-            #      self.errjmppts=no
-            #      print "solved : ret=",ret
-            #      break
-            #if ret < 0:
-            raise IOError("Unable to read frame: %d" % (ret,))
-        #DEBUG("/prefetch_packet")
 
     def read_until_next_frame(self, calltrack=0,maxerrs=10, maxread=10):
         """ read all packets until a frame for the Track "calltrack" arrives """
@@ -2224,7 +2254,7 @@ cdef class FFMpegReader(AFFMpegReader):
         """
           Globally seek on all the streams to a specified position.
         """
-        sys.stderr.write("Seeking to PTS=%d\n"%pts)
+        #sys.stderr.write("Seeking to PTS=%d\n"%pts)
         cdef int ret=0
         #av_read_frame_flush(self.FormatCtx)
         #DEBUG("FLUSHED")

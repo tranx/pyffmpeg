@@ -9,7 +9,7 @@ from pyffmpeg import *
 from PyQt4 import QtCore
 from PyQt4 import QtGui
 
-import sys, numpy
+import sys, numpy, time
 import alsaaudio
 
 try:
@@ -29,6 +29,7 @@ qapp.processEvents()
 
 class AlsaSoundLazyPlayer:
     def __init__(self,rate=44100,channels=2,fps=25):
+        self.fps=fps
         self._rate=rate
         self._channels=channels
         self._d = alsaaudio.PCM()
@@ -38,6 +39,9 @@ class AlsaSoundLazyPlayer:
         self._d.setrate(rate)
     def push_nowait(self,stamped_buffer):
         self._d.write(stamped_buffer[0].data)
+    def push_wait(self,stamped_buffer):
+        self._d.write(stamped_buffer[0].data)
+        time.sleep(0.96/self.fps)
 
 
 class LazyDisplayQt(QtGui.QMainWindow):
@@ -81,9 +85,9 @@ ld=LazyDisplayQt()
 tracks[0].set_observer(ld.f)
 
 ap=AlsaSoundLazyPlayer(tracks[1].get_samplerate(),tracks[1].get_channels(),tracks[0].get_fps())
-tracks[1].set_observer(ap.push_nowait)
+tracks[1].set_observer(ap.push_wait)
 
-tracks[0].seek_to_seconds(10)
+#tracks[0].seek_to_seconds(10)
 ## play the movie !
 
 mp.run()
