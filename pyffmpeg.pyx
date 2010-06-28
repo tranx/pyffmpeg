@@ -1372,7 +1372,7 @@ cdef class VideoTrack(Track):
 
 
 
-    def init(self, pixel_format=-1, videoframebanksz=4, dest_width=-1, dest_height=-1,videobuffers=8,outputmode=OUTPUTMODE_NUMPY,** args):
+    def init(self, pixel_format=-1, videoframebanksz=1, dest_width=-1, dest_height=-1,videobuffers=2,outputmode=OUTPUTMODE_NUMPY,** args):
         """ Construct a video track decoder for a specified image format
 
             You may specify :
