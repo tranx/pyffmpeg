@@ -409,7 +409,7 @@ cdef extern from "libavcodec/avcodec.h":
         int pict_type
         int key_frame
         int16_t (*motion_val[2])[2]
-        uint8_t motion_subsample_log2	
+        uint8_t motion_subsample_log2
 
     struct AVPicture:
         uint8_t *data[4]
@@ -898,7 +898,7 @@ cdef class Track:
         self.do_check_end=0
 
 
-    def init(self,observer=None, support_truncated=1,   **args):
+    def init(self,observer=None, support_truncated=0,   **args):
         """ This is a private constructor
 
             It supports also the following parameted from ffmpeg
@@ -2037,14 +2037,20 @@ cdef class FFMpegReader(AFFMpegReader):
 
             CodecCtx = self.FormatCtx.streams[trackno].codec
             if (s[0]==CODEC_TYPE_VIDEO):
-                vt=VideoTrack()
+                try:
+                    vt=VideoTrack()
+                except:
+                    vt=VideoTrack(support_truncated=1)
                 if (self.default_video_track==None):
                     self.default_video_track=vt
                 vt.init0(self,trackno,  CodecCtx) ## here we are passing cpointers so we do a C call
                 vt.init(**s[2])## here we do a python call
                 self.tracks.append(vt)
             elif (s[0]==CODEC_TYPE_AUDIO):
-                at=AudioTrack()
+                try:
+                    at=AudioTrack()
+                except:
+                    at=AudioTrack(support_truncated=1)
                 if (self.default_audio_track==None):
                     self.default_audio_track=at
                 at.init0(self,trackno,  CodecCtx) ## here we are passing cpointers so we do a C call
@@ -2109,9 +2115,9 @@ cdef class FFMpegReader(AFFMpegReader):
         #DEBUG("/prefetch_packet")
 
     cdef read_packet_buggy(self):
-        """ 
+        """
          This function is supposed to make things nicer...
-         However, it is buggy right now and I have to check 
+         However, it is buggy right now and I have to check
          whether it is sitll necessary... So it will be re-enabled ontime...
         """
         cdef bint packet_processed=False
@@ -2125,10 +2131,10 @@ cdef class FFMpegReader(AFFMpegReader):
                 self.packet=&self.packetbufb
                 self.__prefetch_packet()
             self.packet=self.prepacket
-            if (self.packet==&self.packetbufa): 
-              self.prepacket=&self.packetbufb
+            if (self.packet==&self.packetbufa):
+                self.prepacket=&self.packetbufb
             else:
-              self.prepacket=&self.packetbufa
+                self.prepacket=&self.packetbufa
             #DEBUG("...PRE..")
             self.__prefetch_packet()
             #DEBUG("packets %d %d"%(long(<long int>self.packet),long(<long int>self.prepacket)))
@@ -2147,7 +2153,7 @@ cdef class FFMpegReader(AFFMpegReader):
     def process_current_packet(self):
         """ This function implements the demuxes.
             It dispatch the packet to the correct track processor.
-             
+
             Limitation : TODO: This function is to be improved to support more than audio and  video tracks.
         """
         cdef Track ct
