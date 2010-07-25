@@ -620,7 +620,7 @@ cdef extern from "libavformat/avformat.h":
     AVInputFormat *av_probe_input_format(AVProbeData *pd, int is_opened)
     AVInputFormat *av_probe_input_format2(AVProbeData *pd, int is_opened,int * score)
     AVFormatContext *  avformat_alloc_context()
-    AVOutputFormat *guess_format(char *short_name, char *filename,char *mime_type)
+    AVOutputFormat *av_guess_format(char *short_name, char *filename, char *mime_type)
 
 cdef __registered
 __registered = 0
@@ -1914,7 +1914,7 @@ cdef class FFMpegReader(AFFMpegReader):
 
         if (mode=="w"):
             raise Exception,"Not yet supported sorry"
-            self.FormatCtx.oformat = guess_format(NULL, filename_, NULL);
+            self.FormatCtx.oformat = av_guess_format(NULL, filename_, NULL);
             if (self.FormatCtx.oformat==NULL):
                 raise Exception, "Unable to find output format for %s\n"
 
@@ -1972,7 +1972,7 @@ cdef class FFMpegReader(AFFMpegReader):
         cdef  AVFormatContext * oc
         oc = avformat_alloc_context()
         # Guess file format with file extention
-        oc.oformat = guess_format(NULL, filename_, NULL);
+        oc.oformat = av_guess_format(NULL, filename_, NULL);
         if (oc.oformat==NULL):
             raise Exception, "Unable to find output format for %s\n"
         # Alloc priv_data for format
