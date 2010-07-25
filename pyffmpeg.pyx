@@ -394,7 +394,7 @@ cdef extern from "libavcodec/avcodec.h":
     struct AVPacket:
         int64_t pts                            #< presentation time stamp in time_base units
         int64_t dts                            #< decompression time stamp in time_base units
-        char *data
+        uint8_t *data
         int   size
         int   stream_index
         int   flags
@@ -418,12 +418,12 @@ cdef extern from "libavcodec/avcodec.h":
     AVCodec *avcodec_find_decoder(int id)
     int avcodec_open(AVCodecContext *avctx, AVCodec *codec)
     int avcodec_close(AVCodecContext *avctx)
-    int avcodec_decode_video(AVCodecContext *avctx, AVFrame *picture,
+    int avcodec_decode_video2(AVCodecContext *avctx, AVFrame *picture,
                          int *got_picture_ptr,
-                         char *buf, int buf_size)
-    int avcodec_decode_audio2(AVCodecContext *avctx, #AVFrame *picture,
-                         int16_t * samples, int * frames,
-                         void *buf, int buf_size)
+                         AVPacket *avpkt)
+    int avcodec_decode_audio3(AVCodecContext *avctx, int16_t *samples,
+                         int *frame_size_ptr,
+                         AVPacket *avpkt)
     int avpicture_fill(AVPicture *picture, void *ptr,
                    int pix_fmt, int width, int height)
     AVFrame *avcodec_alloc_frame()
@@ -607,6 +607,7 @@ cdef extern from "libavformat/avformat.h":
                  int index,
                  char *url,
                  int is_output)
+    void av_init_packet(AVPacket *pkt)
     void av_free_packet(AVPacket *pkt)
     int av_read_packet(AVFormatContext *s, AVPacket *pkt)
     int av_read_frame(AVFormatContext *s, AVPacket *pkt)
@@ -1100,13 +1101,21 @@ cdef class AudioPacketDecoder:
         cdef int n
         cdef int len1
         cdef int data_size
+        cdef AVPacket avpkt
+
+        av_init_packet(&avpkt)
+
         if (first):
             self.audio_pkt_data = <uint8_t *>pkt.data;
             self.audio_pkt_size = pkt.size;
 
-        while(self.audio_pkt_size > 0) :
+        while(self.audio_pkt_size > 0):
             data_size = buf_size
-            len1 = avcodec_decode_audio2(aCodecCtx, <int16_t *>audio_buf, &data_size, <uint8_t *>self.audio_pkt_data, self.audio_pkt_size);
+
+            avpkt.data = self.audio_pkt_data
+            avpkt.size = self.audio_pkt_size
+
+            len1 = avcodec_decode_audio3(aCodecCtx, <int16_t *>audio_buf, &data_size, &avpkt)
             if(len1 < 0) :
             # if error, skip frame
                 self.audio_pkt_size = 0;
@@ -1496,7 +1505,7 @@ cdef class VideoTrack(Track):
     cdef process_packet(self, AVPacket *packet):
 
         cdef int frameFinished=0
-        ret = avcodec_decode_video(self.CodecCtx,self.frame,&frameFinished,packet.data,packet.size)
+        ret = avcodec_decode_video2(self.CodecCtx, self.frame, &frameFinished, packet)
         #DEBUG( "process packet size=%s pts=%s dts=%s keyframe=%d picttype=%d"%(str(packet.size),str(packet.pts),str(packet.dts),self.frame.key_frame,self.frame.pict_type))
         if ret < 0:
                 #DEBUG("IOError")
